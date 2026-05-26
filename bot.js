@@ -2,12 +2,10 @@ const TelegramBot = require("node-telegram-bot-api");
 const fetch = require("node-fetch");
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const ANTHROPIC_KEY  = process.env.ANTHROPIC_KEY;
 const CATALOGUE_URL  = process.env.CATALOGUE_URL;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const conversations = {};
-console.log("🤖 Bot Hammami EMTOP démarré !");
+console.log("🤖 Back Office Hammami démarré !");
 
 let catalogue = [];
 let lastFetch = 0;
@@ -31,66 +29,62 @@ async function loadCatalogue() {
     lastFetch = Date.now();
     console.log(`✅ Catalogue chargé : ${catalogue.length} articles`);
   } catch (e) {
-    console.error("Erreur chargement catalogue:", e.message);
+    console.error("Erreur catalogue:", e.message);
   }
+}
+
+function rechercher(query) {
+  const mots = query.toLowerCase().trim().split(/\s+/);
+  return catalogue.filter(p => {
+    const texte = (p.ref + " " + p.nom).toLowerCase();
+    return mots.every(mot => texte.includes(mot));
+  });
+}
+
+function formatArticle(p) {
+  const stockInfo = p.stock === 0
+    ? "❌ Rupture de stock"
+    : p.stock < 5
+    ? `⚠️ Stock faible : ${p.stock} ${p.unite}`
+    : `✅ Stock : ${p.stock} ${p.unite}`;
+  return `📦 *${p.nom}*\n🔖 Réf : ${p.ref}\n${stockInfo}\n💰 Prix HT : ${p.prix.toFixed(3)} DT`;
 }
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
-  const text   = msg.text;
+  const text = (msg.text || "").trim();
   if (!text) return;
 
   await loadCatalogue();
 
-  if (!conversations[chatId]) conversations[chatId] = [];
-  conversations[chatId].push({ role: "user", content: text });
-  if (conversations[chatId].length > 10) conversations[chatId].shift();
-
-  const catalogueText = catalogue.slice(0, 800).map(p =>
-    `REF:${p.ref} | ${p.nom} | STOCK:${p.stock} ${p.unite} | PRIX HT:${p.prix.toFixed(3)} DT`
-  ).join("\n");
-
-  const systemPrompt = `Tu es l'assistant commercial de Comptoir Hammami, spécialisé dans la gamme EMTOP.
-Tu réponds uniquement aux questions sur le stock et les prix des articles EMTOP.
-Réponds toujours en français, de façon claire et concise.
-Si le stock est 0, dis clairement "rupture de stock".
-Si le stock est faible (moins de 5), avertis que le stock est faible.
-Voici le catalogue complet :
-
-${catalogueText}
-
-Règles :
-- Si on demande le prix, donne le prix unitaire HT en DT avec 3 décimales
-- Si on demande la dispo, donne le stock exact + unité
-- Si on demande les deux, donne les deux
-- Si l'article n'existe pas, dis-le clairement
-- Tu peux faire des recherches approximatives (ex: "meule 115" trouve tous les articles meule 115)
-- Pour plusieurs articles similaires, liste-les tous`;
-
-  try {
-    bot.sendChatAction(chatId, "typing");
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: conversations[chatId]
-      })
-    });
-    const data = await response.json();
-    const reply = data.content?.[0]?.text || "Désolé, je n'ai pas pu traiter ta demande.";
-    conversations[chatId].push({ role: "assistant", content: reply });
-    bot.sendMessage(chatId, reply);
-  } catch (e) {
-    console.error("Erreur API:", e.message);
-    bot.sendMessage(chatId, "⚠️ Erreur technique, réessaie dans quelques secondes.");
+  if (text === "/start" || text === "/aide") {
+    return bot.sendMessage(chatId,
+      `👋 *Back Office Hammami — EMTOP*\n\nTape un mot-clé pour chercher un article :\n\nExemples :\n• meule 115\n• perforateur 800\n• EAGR07581\n• pompe submersible\n\nJe te donne le stock et le prix HT instantanément.`,
+      { parse_mode: "Markdown" }
+    );
   }
+
+  const resultats = rechercher(text);
+
+  if (resultats.length === 0) {
+    return bot.sendMessage(chatId,
+      `❓ Aucun article trouvé pour *"${text}"*\n\nEssaie avec d'autres mots-clés.`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  if (resultats.length > 5) {
+    const liste = resultats.slice(0, 5).map(p =>
+      `• ${p.nom} — Stock: ${p.stock} ${p.unite} — ${p.prix.toFixed(3)} DT`
+    ).join("\n");
+    return bot.sendMessage(chatId,
+      `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour plus de détails._`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  const reponse = resultats.map(formatArticle).join("\n\n─────────────\n\n");
+  bot.sendMessage(chatId, reponse, { parse_mode: "Markdown" });
 });
 
 console.log("En attente de messages...");
