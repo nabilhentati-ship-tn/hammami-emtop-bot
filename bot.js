@@ -177,8 +177,16 @@ bot.on("message", async (msg) => {
     );
   }
  
-  const complexe = estQuestionComplexe(text);
-  const resultats = rechercher(text);
+const complexe = estQuestionComplexe(text);
+
+// Pour questions complexes, extraire seulement les mots techniques
+function extraireMotsClés(texte) {
+  const stopWords = ["quelle", "quel", "quels", "quelles", "pour", "une", "les", "des", "est", "son", "sur", "chantier", "besoin", "meilleur", "meilleure", "bon", "bonne", "usage", "utiliser", "adapter", "adapte", "conseille", "recommande"];
+  return texte.split(/\s+/).filter(m => m.length > 3 && !stopWords.includes(normaliser(m))).join(" ");
+}
+
+const queryRecherche = complexe ? extraireMotsClés(text) || text : text;
+const resultats = rechercher(queryRecherche);
  
   // CAS 1 : Recherche simple avec résultats → réponse directe
   if (!complexe && resultats.length > 0) {
