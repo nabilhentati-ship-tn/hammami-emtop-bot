@@ -56,7 +56,8 @@ async function loadPhotos() {
     lines.forEach(line => {
       const cols = line.split(",");
       const ref = (cols[0] || "").replace(/"/g, "").trim();
-      const url = (cols[2] || "").replace(/"/g, "").trim();
+      const fileId = (cols[1] || "").replace(/"/g, "").trim();
+const url = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
       if (ref && url) photos[ref] = url;
     });
     lastPhotoFetch = Date.now();
