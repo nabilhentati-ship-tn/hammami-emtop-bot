@@ -4,9 +4,10 @@ const fetch = require("node-fetch");
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CATALOGUE_URL  = process.env.CATALOGUE_URL;
 const GROQ_API_KEY   = process.env.GROQ_API_KEY;
+const PHOTOS_URL     = process.env.PHOTOS_URL;
  
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-console.log("🤖 Back Office Hammami EMTOP + IA démarré !");
+console.log("🤖 Back Office Hammami EMTOP + IA + Photos démarré !");
  
 // ─────────────────────────────────────────────
 // CATALOGUE
@@ -20,7 +21,6 @@ async function loadCatalogue() {
     const res = await fetch(CATALOGUE_URL);
     const buffer = await res.buffer();
     const csv = buffer.toString("utf-8");
- 
     const lines = csv.trim().split("\n").slice(1);
     catalogue = lines.map(line => {
       const cols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
@@ -32,17 +32,42 @@ async function loadCatalogue() {
         prix:  parseFloat((cols[4] || "0").replace(/"/g, "")) || 0,
       };
     }).filter(p => p.ref);
- 
     lastFetch = Date.now();
     console.log(`✅ Catalogue chargé : ${catalogue.length} articles`);
-    console.log("Exemples noms:", catalogue.slice(0,3).map(p => p.nom));
   } catch (e) {
     console.error("Erreur catalogue:", e.message);
   }
 }
  
 // ─────────────────────────────────────────────
-// NORMALISATION TEXTE
+// PHOTOS
+// ─────────────────────────────────────────────
+let photos = {};
+let lastPhotoFetch = 0;
+ 
+async function loadPhotos() {
+  if (Date.now() - lastPhotoFetch < 30 * 60 * 1000) return;
+  try {
+    const res = await fetch(PHOTOS_URL);
+    const buffer = await res.buffer();
+    const csv = buffer.toString("utf-8");
+    const lines = csv.trim().split("\n").slice(1);
+    photos = {};
+    lines.forEach(line => {
+      const cols = line.split(",");
+      const ref = (cols[0] || "").replace(/"/g, "").trim();
+      const url = (cols[2] || "").replace(/"/g, "").trim();
+      if (ref && url) photos[ref] = url;
+    });
+    lastPhotoFetch = Date.now();
+    console.log(`✅ Photos chargées : ${Object.keys(photos).length} URLs`);
+  } catch (e) {
+    console.error("Erreur photos:", e.message);
+  }
+}
+ 
+// ─────────────────────────────────────────────
+// NORMALISATION
 // ─────────────────────────────────────────────
 function normaliser(texte) {
   return texte
@@ -53,16 +78,14 @@ function normaliser(texte) {
 }
  
 // ─────────────────────────────────────────────
-// RECHERCHE FLOUE PAR SCORE
+// RECHERCHE FLOUE
 // ─────────────────────────────────────────────
 function rechercher(query) {
   const mots = normaliser(query)
     .trim()
     .split(/\s+/)
     .filter(m => m.length > 2);
- 
   if (mots.length === 0) return [];
- 
   return catalogue
     .map(p => {
       const texte = normaliser(p.ref + " " + p.nom);
@@ -75,7 +98,7 @@ function rechercher(query) {
 }
  
 // ─────────────────────────────────────────────
-// FORMAT ARTICLE
+// FORMAT ARTICLE (texte)
 // ─────────────────────────────────────────────
 function formatArticle(p) {
   const stockInfo = p.stock === 0
@@ -83,19 +106,37 @@ function formatArticle(p) {
     : p.stock < 5
     ? `⚠️ Stock faible : ${p.stock} ${p.unite}`
     : `✅ Stock : ${p.stock} ${p.unite}`;
-  return `📦 *${p.nom}*\n🔖 Réf : ${p.ref}\n${stockInfo}\n💰 Prix HT : ${p.prix.toFixed(3)} DT`;
+  return `📦 *${p.nom}*\n🔖 Réf : \`${p.ref}\`\n${stockInfo}\n💰 Prix HT : ${p.prix.toFixed(3)} DT`;
 }
  
 // ─────────────────────────────────────────────
-// ROUTEUR : simple ou complexe ?
+// ENVOYER ARTICLE AVEC PHOTO
+// ─────────────────────────────────────────────
+async function envoyerArticle(chatId, article) {
+  const texte = formatArticle(article);
+  const photoUrl = photos[article.ref];
+ 
+  if (photoUrl) {
+    try {
+      await bot.sendPhoto(chatId, photoUrl, {
+        caption: texte,
+        parse_mode: "Markdown"
+      });
+      return;
+    } catch (e) {
+      console.error(`Photo échouée pour ${article.ref}:`, e.message);
+    }
+  }
+  // Fallback texte si pas de photo
+  await bot.sendMessage(chatId, texte, { parse_mode: "Markdown" });
+}
+ 
+// ─────────────────────────────────────────────
+// ROUTEUR
 // ─────────────────────────────────────────────
 function estQuestionComplexe(text) {
   const t = normaliser(text);
- 
-  // Référence exacte → simple
   if (/^[a-z]{2,6}[\-\d]{4,}$/i.test(text.trim())) return false;
- 
-  // Mots-clés conseil/comparaison
   const motsComplexes = [
     "meilleur", "mieux", "conseil", "recommande", "comparer", "comparaison",
     "difference", "lequel", "laquelle", "choisir", "besoin", "chantier",
@@ -105,33 +146,40 @@ function estQuestionComplexe(text) {
   if (motsComplexes.some(m => t.includes(m))) return true;
   if (text.includes("?")) return true;
   if (text.trim().split(/\s+/).length > 4) return true;
- 
   return false;
 }
  
+function extraireMotsCles(texte) {
+  const stopWords = [
+    "quelle", "quel", "quels", "quelles", "pour", "une", "les", "des",
+    "est", "son", "sur", "chantier", "besoin", "meilleur", "meilleure",
+    "bon", "bonne", "usage", "utiliser", "adapter", "adapte", "conseille",
+    "recommande", "avoir", "faire", "avec", "dans", "plus", "tres"
+  ];
+  return texte.split(/\s+/)
+    .filter(m => m.length > 3 && !stopWords.includes(normaliser(m)))
+    .join(" ");
+}
+ 
 // ─────────────────────────────────────────────
-// AGENT GROQ IA
+// AGENT GROQ
 // ─────────────────────────────────────────────
 async function demanderGroq(question, articles) {
   if (!GROQ_API_KEY) return null;
- 
   const contexte = articles.slice(0, 8).map(p =>
     `- ${p.nom} (Réf: ${p.ref}) | Prix: ${p.prix.toFixed(3)} DT | Stock: ${p.stock} ${p.unite}`
   ).join("\n");
- 
   const prompt = articles.length > 0
     ? `Tu es l'assistant commercial de Comptoir Hammami, distributeur d'outillage EMTOP en Tunisie.
 Question du commercial : "${question}"
  
-Articles disponibles dans le catalogue :
+Articles disponibles :
 ${contexte}
  
-Réponds en français, max 4 lignes. Recommande le meilleur article pour ce besoin, explique pourquoi en une phrase, mentionne prix et stock. Sois direct et pratique.`
+Réponds en français, max 4 lignes. Recommande le meilleur article, explique pourquoi en une phrase, mentionne prix et stock.`
     : `Tu es l'assistant commercial de Comptoir Hammami, distributeur d'outillage EMTOP en Tunisie.
-Question du commercial : "${question}"
- 
-Aucun article trouvé avec ces mots-clés dans le catalogue EMTOP.
-En 2 lignes maximum, suggère comment reformuler la recherche avec des termes techniques plus précis (ex: wattage, dimension, référence).`;
+Question : "${question}"
+Aucun article trouvé. Suggère en 2 lignes comment reformuler avec des termes techniques précis.`;
  
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -147,11 +195,8 @@ En 2 lignes maximum, suggère comment reformuler la recherche avec des termes te
         temperature: 0.3
       })
     });
- 
     const data = await res.json();
-    if (data.choices && data.choices[0]) {
-      return data.choices[0].message.content.trim();
-    }
+    if (data.choices && data.choices[0]) return data.choices[0].message.content.trim();
     return null;
   } catch (e) {
     console.error("Erreur Groq:", e.message);
@@ -168,67 +213,67 @@ bot.on("message", async (msg) => {
   if (!text) return;
  
   await loadCatalogue();
+  await loadPhotos();
  
-  // Commandes de base
+  // Commandes
   if (text === "/start" || text === "/aide") {
     return bot.sendMessage(chatId,
-      `👋 *Back Office Hammami — EMTOP IA*\n\nJe comprends maintenant le langage naturel !\n\n*Recherche directe :*\n• meule 115\n• motopompe diesel\n• EGWP8012\n\n*Questions intelligentes :*\n• Quelle motopompe pour chantier ?\n• Meilleure électropompe pas chère ?\n• Différence entre deux références ?\n\n✨ _Propulsé par IA Groq — Gratuit_`,
+      `👋 *Back Office Hammami — EMTOP IA*\n\n` +
+      `Je comprends le langage naturel et j'affiche les photos produits !\n\n` +
+      `*Recherche directe :*\n• meule 115\n• motopompe diesel\n• ECDL12620\n\n` +
+      `*Questions intelligentes :*\n• Quelle motopompe pour chantier ?\n• Meilleure visseuse 20V ?\n• Comparer deux références ?\n\n` +
+      `✨ _Propulsé par IA Groq — Gratuit_`,
       { parse_mode: "Markdown" }
     );
   }
  
-const complexe = estQuestionComplexe(text);
-
-// Pour questions complexes, extraire seulement les mots techniques
-function extraireMotsClés(texte) {
-  const stopWords = ["quelle", "quel", "quels", "quelles", "pour", "une", "les", "des", "est", "son", "sur", "chantier", "besoin", "meilleur", "meilleure", "bon", "bonne", "usage", "utiliser", "adapter", "adapte", "conseille", "recommande"];
-  return texte.split(/\s+/).filter(m => m.length > 3 && !stopWords.includes(normaliser(m))).join(" ");
-}
-
-const queryRecherche = complexe ? extraireMotsClés(text) || text : text;
-const resultats = rechercher(queryRecherche);
+  const complexe = estQuestionComplexe(text);
+  const queryRecherche = complexe ? extraireMotsCles(text) || text : text;
+  const resultats = rechercher(queryRecherche);
  
-  // CAS 1 : Recherche simple avec résultats → réponse directe
+  // CAS 1 : Simple + résultats → photo + fiche
   if (!complexe && resultats.length > 0) {
     if (resultats.length > 5) {
       const liste = resultats.slice(0, 5).map(p =>
         `• ${p.nom}\n  Stock: ${p.stock} ${p.unite} — ${p.prix.toFixed(3)} DT`
       ).join("\n\n");
       return bot.sendMessage(chatId,
-        `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour plus de détails._`,
+        `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour voir les photos._`,
         { parse_mode: "Markdown" }
       );
     }
-    const reponse = resultats.map(formatArticle).join("\n\n─────────────\n\n");
-    return bot.sendMessage(chatId, reponse, { parse_mode: "Markdown" });
+    // Envoyer chaque article avec sa photo
+    for (const article of resultats) {
+      await envoyerArticle(chatId, article);
+    }
+    return;
   }
  
-  // CAS 2 : Question complexe → agent IA
+  // CAS 2 : Complexe → IA + photos
   const msgAttente = await bot.sendMessage(chatId, "🤖 _Analyse en cours..._", { parse_mode: "Markdown" });
- 
   const reponseIA = await demanderGroq(text, resultats);
- 
   try { await bot.deleteMessage(chatId, msgAttente.message_id); } catch(e) {}
  
   if (reponseIA) {
-    let message = `🧠 *Assistant IA :*\n\n${reponseIA}`;
-    if (resultats.length > 0) {
-      message += `\n\n─────────────\n📋 *Articles correspondants :*\n\n`;
-      message += resultats.slice(0, 3).map(formatArticle).join("\n\n─────────────\n\n");
+    await bot.sendMessage(chatId, `🧠 *Assistant IA :*\n\n${reponseIA}`, { parse_mode: "Markdown" });
+    // Envoyer les 3 meilleurs articles avec photos
+    for (const article of resultats.slice(0, 3)) {
+      await envoyerArticle(chatId, article);
     }
-    return bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    return;
   }
  
-  // CAS 3 : Fallback si Groq indisponible
+  // CAS 3 : Fallback
   if (resultats.length === 0) {
     return bot.sendMessage(chatId,
-      `❓ Aucun article trouvé pour *"${text}"*\n\nEssaie avec des termes comme :\n• motopompe, electropompe, vibreur\n• une dimension : 115, 125, 1000l\n• une référence : EGWP, EWPP, EVPR`,
+      `❓ Aucun article trouvé pour *"${text}"*\n\nEssaie avec :\n• motopompe, electropompe, vibreur\n• une dimension : 115, 125, 20V\n• une référence : ECDL, EGWP, EWPP`,
       { parse_mode: "Markdown" }
     );
   }
  
-  const reponse = resultats.map(formatArticle).join("\n\n─────────────\n\n");
-  return bot.sendMessage(chatId, reponse, { parse_mode: "Markdown" });
+  for (const article of resultats.slice(0, 3)) {
+    await envoyerArticle(chatId, article);
+  }
 });
  
 console.log("En attente de messages...");
