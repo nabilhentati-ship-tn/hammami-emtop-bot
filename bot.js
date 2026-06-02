@@ -90,7 +90,7 @@ async function loadFiches() {
       if (nom && url) {
         // Extraire la référence depuis le nom du fichier PDF
         // Ex: "ECDL12620.pdf" → "ECDL12620"
-        const ref = nom.replace(/\.pdf$/i, "").trim();
+        const ref = nom.replace(/\s*Technical Data\.pdf$/i, "").replace(/\.pdf$/i, "").trim();
         fiches[ref.toUpperCase()] = url;
       }
     });
