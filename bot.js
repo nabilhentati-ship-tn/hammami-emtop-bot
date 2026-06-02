@@ -5,9 +5,10 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CATALOGUE_URL  = process.env.CATALOGUE_URL;
 const GROQ_API_KEY   = process.env.GROQ_API_KEY;
 const PHOTOS_URL     = process.env.PHOTOS_URL;
+const FICHES_URL     = process.env.FICHES_URL;
  
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-console.log("🤖 Back Office Hammami EMTOP + IA + Photos démarré !");
+console.log("🤖 EMTOP Back Office — Stock + Prix + Photo + Fiches démarré !");
  
 // ─────────────────────────────────────────────
 // CATALOGUE
@@ -57,13 +58,46 @@ async function loadPhotos() {
       const cols = line.split(",");
       const ref = (cols[0] || "").replace(/"/g, "").trim();
       const fileId = (cols[1] || "").replace(/"/g, "").trim();
-const url = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
-      if (ref && url) photos[ref] = url;
+      if (ref && fileId) {
+        photos[ref] = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
+      }
     });
     lastPhotoFetch = Date.now();
     console.log(`✅ Photos chargées : ${Object.keys(photos).length} URLs`);
   } catch (e) {
     console.error("Erreur photos:", e.message);
+  }
+}
+ 
+// ─────────────────────────────────────────────
+// FICHES TECHNIQUES
+// ─────────────────────────────────────────────
+let fiches = {};
+let lastFichesFetch = 0;
+ 
+async function loadFiches() {
+  if (Date.now() - lastFichesFetch < 30 * 60 * 1000) return;
+  try {
+    const res = await fetch(FICHES_URL);
+    const buffer = await res.buffer();
+    const csv = buffer.toString("utf-8");
+    const lines = csv.trim().split("\n").slice(1);
+    fiches = {};
+    lines.forEach(line => {
+      const cols = line.split(",");
+      const nom = (cols[0] || "").replace(/"/g, "").trim();
+      const url = (cols[1] || "").replace(/"/g, "").trim();
+      if (nom && url) {
+        // Extraire la référence depuis le nom du fichier PDF
+        // Ex: "ECDL12620.pdf" → "ECDL12620"
+        const ref = nom.replace(/\.pdf$/i, "").trim();
+        fiches[ref.toUpperCase()] = url;
+      }
+    });
+    lastFichesFetch = Date.now();
+    console.log(`✅ Fiches chargées : ${Object.keys(fiches).length} PDFs`);
+  } catch (e) {
+    console.error("Erreur fiches:", e.message);
   }
 }
  
@@ -99,24 +133,21 @@ function rechercher(query) {
 }
  
 // ─────────────────────────────────────────────
-// FORMAT ARTICLE (texte)
-// ─────────────────────────────────────────────
-function formatArticle(p) {
-  const stockInfo = p.stock === 0
-    ? "❌ Rupture de stock"
-    : p.stock < 5
-    ? `⚠️ Stock faible : ${p.stock} ${p.unite}`
-    : `✅ Stock : ${p.stock} ${p.unite}`;
-  return `📦 *${p.nom}*\n🔖 Réf : \`${p.ref}\`\n${stockInfo}\n💰 Prix HT : ${p.prix.toFixed(3)} DT`;
-}
- 
-// ─────────────────────────────────────────────
-// ENVOYER ARTICLE AVEC PHOTO
+// ENVOYER ARTICLE COMPLET
 // ─────────────────────────────────────────────
 async function envoyerArticle(chatId, article) {
-  const texte = formatArticle(article);
-  const photoUrl = photos[article.ref];
+  const stockInfo = article.stock === 0
+    ? "❌ Rupture de stock"
+    : article.stock < 5
+    ? `⚠️ Stock faible : ${article.stock} ${article.unite}`
+    : `✅ Stock : ${article.stock} ${article.unite}`;
  
+  const ficheUrl = fiches[article.ref.toUpperCase()];
+  const ficheInfo = ficheUrl ? `\n📄 [Fiche technique](${ficheUrl})` : "";
+ 
+  const texte = `📦 *${article.nom}*\n🔖 Réf : \`${article.ref}\`\n${stockInfo}\n💰 Prix HT : ${article.prix.toFixed(3)} DT${ficheInfo}`;
+ 
+  const photoUrl = photos[article.ref];
   if (photoUrl) {
     try {
       await bot.sendPhoto(chatId, photoUrl, {
@@ -215,14 +246,19 @@ bot.on("message", async (msg) => {
  
   await loadCatalogue();
   await loadPhotos();
+  await loadFiches();
  
   // Commandes
   if (text === "/start" || text === "/aide") {
     return bot.sendMessage(chatId,
-      `👋 *Back Office Hammami — EMTOP IA*\n\n` +
-      `Je comprends le langage naturel et j'affiche les photos produits !\n\n` +
-      `*Recherche directe :*\n• meule 115\n• motopompe diesel\n• ECDL12620\n\n` +
-      `*Questions intelligentes :*\n• Quelle motopompe pour chantier ?\n• Meilleure visseuse 20V ?\n• Comparer deux références ?\n\n` +
+      `👋 *EMTOP Back Office*\n\n` +
+      `Chaque réponse inclut :\n` +
+      `📷 Photo produit\n` +
+      `✅ Stock disponible\n` +
+      `💰 Prix HT\n` +
+      `📄 Fiche technique PDF\n\n` +
+      `*Recherche directe :*\n• ECDL12620\n• visseuse 20V\n• motopompe diesel\n\n` +
+      `*Questions intelligentes :*\n• Meilleure perceuse sous 300 DT ?\n• Quelle visseuse pour usage pro ?\n\n` +
       `✨ _Propulsé par IA Groq — Gratuit_`,
       { parse_mode: "Markdown" }
     );
@@ -232,32 +268,30 @@ bot.on("message", async (msg) => {
   const queryRecherche = complexe ? extraireMotsCles(text) || text : text;
   const resultats = rechercher(queryRecherche);
  
-  // CAS 1 : Simple + résultats → photo + fiche
+  // CAS 1 : Simple + résultats
   if (!complexe && resultats.length > 0) {
     if (resultats.length > 5) {
       const liste = resultats.slice(0, 5).map(p =>
         `• ${p.nom}\n  Stock: ${p.stock} ${p.unite} — ${p.prix.toFixed(3)} DT`
       ).join("\n\n");
       return bot.sendMessage(chatId,
-        `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour voir les photos._`,
+        `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour voir photo et fiche._`,
         { parse_mode: "Markdown" }
       );
     }
-    // Envoyer chaque article avec sa photo
     for (const article of resultats) {
       await envoyerArticle(chatId, article);
     }
     return;
   }
  
-  // CAS 2 : Complexe → IA + photos
+  // CAS 2 : Complexe → IA
   const msgAttente = await bot.sendMessage(chatId, "🤖 _Analyse en cours..._", { parse_mode: "Markdown" });
   const reponseIA = await demanderGroq(text, resultats);
   try { await bot.deleteMessage(chatId, msgAttente.message_id); } catch(e) {}
  
   if (reponseIA) {
     await bot.sendMessage(chatId, `🧠 *Assistant IA :*\n\n${reponseIA}`, { parse_mode: "Markdown" });
-    // Envoyer les 3 meilleurs articles avec photos
     for (const article of resultats.slice(0, 3)) {
       await envoyerArticle(chatId, article);
     }
@@ -278,4 +312,3 @@ bot.on("message", async (msg) => {
 });
  
 console.log("En attente de messages...");
- 
