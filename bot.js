@@ -25,18 +25,12 @@ async function loadCatalogue() {
     const lines = csv.trim().split("\n").slice(1);
     catalogue = lines.map(line => {
       const cols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
-      const clean = (i) => (cols[i] || "").replace(/"/g, "").trim();
-      const num   = (i) => parseFloat(clean(i)) || 0;
       return {
-        ref:      clean(0),
-        nom:      clean(2),   // Colonne C = Description
-        statut:   clean(3),   // Colonne D = Statut
-        stock:    num(5),     // Colonne F = Stocks total
-        smsfx:    num(6),     // Colonne G = STOCKS SMSFX
-        smtn:     num(7),     // Colonne H = STOCKS SMTN
-        smzr:     num(8),     // Colonne I = STOCKS SMZR
-        unite:    "",
-        prix:     0,
+        ref:   (cols[0] || "").replace(/"/g, "").trim(),
+        nom:   (cols[1] || "").replace(/"/g, "").trim(),
+        stock: parseFloat((cols[2] || "0").replace(/"/g, "")) || 0,
+        unite: (cols[3] || "").replace(/"/g, "").trim(),
+        prix:  parseFloat((cols[4] || "0").replace(/"/g, "")) || 0,
       };
     }).filter(p => p.ref);
     lastFetch = Date.now();
@@ -140,41 +134,17 @@ function rechercher(query) {
 // ENVOYER ARTICLE COMPLET
 // ─────────────────────────────────────────────
 async function envoyerArticle(chatId, article) {
-  // Stock global
-  const stockGlobal = article.stock;
-  let stockLine;
-  if (stockGlobal === 0) {
-    stockLine = "❌ Rupture de stock";
-  } else if (stockGlobal < 5) {
-    stockLine = `⚠️ Stock faible : ${stockGlobal}`;
-  } else {
-    stockLine = `✅ Stock disponible : ${stockGlobal}`;
-  }
-
-  // Détail par site
-  const sfax  = article.smsfx || 0;
-  const tunis = article.smtn  || 0;
-  const zarzis = article.smzr || 0;
-
-  const siteLines =
-    `🏭 Sfax   : ${sfax}\n` +
-    `🏢 Tunis  : ${tunis}\n` +
-    `🏬 Zarzis : ${zarzis}`;
-
+  const stockInfo = article.stock === 0
+    ? "❌ Rupture de stock"
+    : article.stock < 5
+    ? `⚠️ Stock faible : ${article.stock} ${article.unite}`
+    : `✅ Stock : ${article.stock} ${article.unite}`;
+ 
   const ficheUrl = fiches[article.ref.toUpperCase()];
   const ficheInfo = ficheUrl ? `\n📄 [Fiche technique](${ficheUrl})` : "";
-
-  const prixLine = article.prix > 0 ? `\n💰 Prix HT : ${article.prix.toFixed(3)} DT` : "";
-
-  const texte =
-    `📦 *${article.nom}*\n` +
-    `🔖 Réf : \`${article.ref}\`\n` +
-    `${stockLine}\n` +
-    `─────────────\n` +
-    `${siteLines}` +
-    `${prixLine}` +
-    `${ficheInfo}`;
-
+ 
+  const texte = `📦 *${article.nom}*\n🔖 Réf : \`${article.ref}\`\n${stockInfo}\n💰 Prix HT : ${article.prix.toFixed(3)} DT${ficheInfo}`;
+ 
   const photoUrl = photos[article.ref];
   if (photoUrl) {
     try {
@@ -226,7 +196,7 @@ function extraireMotsCles(texte) {
 async function demanderGroq(question, articles) {
   if (!GROQ_API_KEY) return null;
   const contexte = articles.slice(0, 8).map(p =>
-    `- ${p.nom} (Réf: ${p.ref}) | Prix: ${p.prix.toFixed(3)} DT | Stock total: ${p.stock} (Sfax: ${p.smsfx}, Tunis: ${p.smtn}, Zarzis: ${p.smzr})`
+    `- ${p.nom} (Réf: ${p.ref}) | Prix: ${p.prix.toFixed(3)} DT | Stock: ${p.stock} ${p.unite}`
   ).join("\n");
   const prompt = articles.length > 0
     ? `Tu es l'assistant commercial de Comptoir Hammami, distributeur d'outillage EMTOP en Tunisie.
@@ -280,7 +250,7 @@ bot.on("message", async (msg) => {
       `👋 *EMTOP Back Office*\n\n` +
       `Chaque réponse inclut :\n` +
       `📷 Photo produit\n` +
-      `✅ Stock par site (Sfax / Tunis / Zarzis)\n` +
+      `✅ Stock disponible\n` +
       `💰 Prix HT\n` +
       `📄 Fiche technique PDF\n\n` +
       `*Recherche directe :*\n• ECDL12620\n• visseuse 20V\n• motopompe diesel\n\n` +
@@ -297,7 +267,7 @@ bot.on("message", async (msg) => {
   if (!complexe && resultats.length > 0) {
     if (resultats.length > 5) {
       const liste = resultats.slice(0, 5).map(p =>
-        `• ${p.nom}\n  🏭 Sfax: ${p.smsfx} | 🏢 Tunis: ${p.smtn} | 🏬 Zarzis: ${p.smzr}`
+        `• ${p.nom}\n  Stock: ${p.stock} ${p.unite} — ${p.prix.toFixed(3)} DT`
       ).join("\n\n");
       return bot.sendMessage(chatId,
         `🔍 *${resultats.length} articles trouvés* (top 5) :\n\n${liste}\n\n_Précise ta recherche pour voir photo et fiche._`,
