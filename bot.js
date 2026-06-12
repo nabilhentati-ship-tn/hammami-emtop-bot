@@ -1,21 +1,21 @@
 const TelegramBot = require("node-telegram-bot-api");
 const fetch = require("node-fetch");
- 
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CATALOGUE_URL  = process.env.CATALOGUE_URL;
 const GROQ_API_KEY   = process.env.GROQ_API_KEY;
 const PHOTOS_URL     = process.env.PHOTOS_URL;
 const FICHES_URL     = process.env.FICHES_URL;
- 
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 console.log("🤖 EMTOP Back Office — Stock + Prix + Photo + Fiches démarré !");
- 
+
 // ─────────────────────────────────────────────
 // CATALOGUE
 // ─────────────────────────────────────────────
 let catalogue = [];
 let lastFetch = 0;
- 
+
 async function loadCatalogue() {
   if (Date.now() - lastFetch < 5 * 60 * 1000) return;
   try {
@@ -26,11 +26,13 @@ async function loadCatalogue() {
     catalogue = lines.map(line => {
       const cols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
       return {
-        ref:   (cols[0] || "").replace(/"/g, "").trim(),
-        nom:   (cols[1] || "").replace(/"/g, "").trim(),
-        stock: parseFloat((cols[2] || "0").replace(/"/g, "")) || 0,
-        unite: (cols[3] || "").replace(/"/g, "").trim(),
-        prix:  parseFloat((cols[4] || "0").replace(/"/g, "")) || 0,
+        ref:         (cols[0] || "").replace(/"/g, "").trim(),
+        nom:         (cols[1] || "").replace(/"/g, "").trim(),
+        stock:       parseFloat((cols[2] || "0").replace(/"/g, "")) || 0,
+        unite:       (cols[3] || "").replace(/"/g, "").trim(),
+        prix:        parseFloat((cols[4] || "0").replace(/"/g, "")) || 0,
+        stock_sfax:  parseFloat((cols[7] || "0").replace(/"/g, "")) || 0,
+        stock_tunis: parseFloat((cols[8] || "0").replace(/"/g, "")) || 0,
       };
     }).filter(p => p.ref);
     lastFetch = Date.now();
@@ -39,13 +41,13 @@ async function loadCatalogue() {
     console.error("Erreur catalogue:", e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────
 // PHOTOS
 // ─────────────────────────────────────────────
 let photos = {};
 let lastPhotoFetch = 0;
- 
+
 async function loadPhotos() {
   if (Date.now() - lastPhotoFetch < 30 * 60 * 1000) return;
   try {
@@ -68,13 +70,13 @@ async function loadPhotos() {
     console.error("Erreur photos:", e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────
 // FICHES TECHNIQUES
 // ─────────────────────────────────────────────
 let fiches = {};
 let lastFichesFetch = 0;
- 
+
 async function loadFiches() {
   if (Date.now() - lastFichesFetch < 30 * 60 * 1000) return;
   try {
@@ -98,7 +100,7 @@ async function loadFiches() {
     console.error("Erreur fiches:", e.message);
   }
 }
- 
+
 // ─────────────────────────────────────────────
 // NORMALISATION
 // ─────────────────────────────────────────────
@@ -109,7 +111,7 @@ function normaliser(texte) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/['']/g, " ");
 }
- 
+
 // ─────────────────────────────────────────────
 // RECHERCHE FLOUE
 // ─────────────────────────────────────────────
@@ -129,7 +131,7 @@ function rechercher(query) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 10);
 }
- 
+
 // ─────────────────────────────────────────────
 // ENVOYER ARTICLE COMPLET
 // ─────────────────────────────────────────────
@@ -138,13 +140,15 @@ async function envoyerArticle(chatId, article) {
     ? "❌ Rupture de stock"
     : article.stock < 5
     ? `⚠️ Stock faible : ${article.stock} ${article.unite}`
-    : `✅ Stock : ${article.stock} ${article.unite}`;
- 
+    : `✅ Stock total : ${article.stock} ${article.unite}`;
+
+  const siteInfo = `📍 Sfax : ${article.stock_sfax} ${article.unite}\n📍 Tunis : ${article.stock_tunis} ${article.unite}`;
+
   const ficheUrl = fiches[article.ref.toUpperCase()];
   const ficheInfo = ficheUrl ? `\n📄 [Fiche technique](${ficheUrl})` : "";
- 
-  const texte = `📦 *${article.nom}*\n🔖 Réf : \`${article.ref}\`\n${stockInfo}\n💰 Prix HT : ${article.prix.toFixed(3)} DT${ficheInfo}`;
- 
+
+  const texte = `📦 *${article.nom}*\n🔖 Réf : \`${article.ref}\`\n${stockInfo}\n${siteInfo}\n💰 Prix HT : ${article.prix.toFixed(3)} DT${ficheInfo}`;
+
   const photoUrl = photos[article.ref];
   if (photoUrl) {
     try {
@@ -159,7 +163,7 @@ async function envoyerArticle(chatId, article) {
   }
   await bot.sendMessage(chatId, texte, { parse_mode: "Markdown" });
 }
- 
+
 // ─────────────────────────────────────────────
 // ROUTEUR
 // ─────────────────────────────────────────────
@@ -177,7 +181,7 @@ function estQuestionComplexe(text) {
   if (text.trim().split(/\s+/).length > 4) return true;
   return false;
 }
- 
+
 function extraireMotsCles(texte) {
   const stopWords = [
     "quelle", "quel", "quels", "quelles", "pour", "une", "les", "des",
@@ -189,7 +193,7 @@ function extraireMotsCles(texte) {
     .filter(m => m.length > 3 && !stopWords.includes(normaliser(m)))
     .join(" ");
 }
- 
+
 // ─────────────────────────────────────────────
 // AGENT GROQ
 // ─────────────────────────────────────────────
@@ -201,15 +205,15 @@ async function demanderGroq(question, articles) {
   const prompt = articles.length > 0
     ? `Tu es l'assistant commercial de Comptoir Hammami, distributeur d'outillage EMTOP en Tunisie.
 Question du commercial : "${question}"
- 
+
 Articles disponibles :
 ${contexte}
- 
+
 Réponds en français, max 4 lignes. Recommande le meilleur article, explique pourquoi en une phrase, mentionne prix et stock.`
     : `Tu es l'assistant commercial de Comptoir Hammami, distributeur d'outillage EMTOP en Tunisie.
 Question : "${question}"
 Aucun article trouvé. Suggère en 2 lignes comment reformuler avec des termes techniques précis.`;
- 
+
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -232,7 +236,7 @@ Aucun article trouvé. Suggère en 2 lignes comment reformuler avec des termes t
     return null;
   }
 }
- 
+
 // ─────────────────────────────────────────────
 // HANDLER PRINCIPAL
 // ─────────────────────────────────────────────
@@ -240,11 +244,11 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || "").trim();
   if (!text) return;
- 
+
   await loadCatalogue();
   await loadPhotos();
   await loadFiches();
- 
+
   if (text === "/start" || text === "/aide") {
     return bot.sendMessage(chatId,
       `👋 *EMTOP Back Office*\n\n` +
@@ -259,11 +263,11 @@ bot.on("message", async (msg) => {
       { parse_mode: "Markdown" }
     );
   }
- 
+
   const complexe = estQuestionComplexe(text);
   const queryRecherche = complexe ? extraireMotsCles(text) || text : text;
   const resultats = rechercher(queryRecherche);
- 
+
   if (!complexe && resultats.length > 0) {
     if (resultats.length > 5) {
       const liste = resultats.slice(0, 5).map(p =>
@@ -279,11 +283,11 @@ bot.on("message", async (msg) => {
     }
     return;
   }
- 
+
   const msgAttente = await bot.sendMessage(chatId, "🤖 _Analyse en cours..._", { parse_mode: "Markdown" });
   const reponseIA = await demanderGroq(text, resultats);
   try { await bot.deleteMessage(chatId, msgAttente.message_id); } catch(e) {}
- 
+
   if (reponseIA) {
     await bot.sendMessage(chatId, `🧠 *Assistant IA :*\n\n${reponseIA}`, { parse_mode: "Markdown" });
     for (const article of resultats.slice(0, 3)) {
@@ -291,17 +295,17 @@ bot.on("message", async (msg) => {
     }
     return;
   }
- 
+
   if (resultats.length === 0) {
     return bot.sendMessage(chatId,
       `❓ Aucun article trouvé pour *"${text}"*\n\nEssaie avec :\n• motopompe, electropompe, vibreur\n• une dimension : 115, 125, 20V\n• une référence : ECDL, EGWP, EWPP`,
       { parse_mode: "Markdown" }
     );
   }
- 
+
   for (const article of resultats.slice(0, 3)) {
     await envoyerArticle(chatId, article);
   }
 });
- 
+
 console.log("En attente de messages...");
