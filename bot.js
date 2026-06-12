@@ -142,7 +142,7 @@ async function envoyerArticle(chatId, article) {
     ? `⚠️ Stock faible : ${article.stock} ${article.unite}`
     : `✅ Stock total : ${article.stock} ${article.unite}`;
 
-  const siteInfo = `📍 Sfax : ${article.stock_tunis} ${article.unite}\n📍 Tunis : ${article.stock_sfax} ${article.unite}`;
+ const siteInfo = `📍 Tunis : ${article.stock_tunis} ${article.unite}`;
 
   const ficheUrl = fiches[article.ref.toUpperCase()];
   const ficheInfo = ficheUrl ? `\n📄 [Fiche technique](${ficheUrl})` : "";
