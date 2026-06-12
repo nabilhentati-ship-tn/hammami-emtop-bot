@@ -24,7 +24,7 @@ async function loadCatalogue() {
     const csv = buffer.toString("utf-8");
     const lines = csv.trim().split("\n").slice(1);
     catalogue = lines.map(line => {
-      const cols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
+      const cols = line.split(",").map(c => c.replace(/"/g, "").trim());
       return {
         ref:         (cols[0] || "").replace(/"/g, "").trim(),
         nom:         (cols[1] || "").replace(/"/g, "").trim(),
