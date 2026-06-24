@@ -6,7 +6,7 @@ const CATALOGUE_URL  = process.env.CATALOGUE_URL;
 const GROQ_API_KEY   = process.env.GROQ_API_KEY;
 const PHOTOS_URL     = process.env.PHOTOS_URL;
 const FICHES_URL     = process.env.FICHES_URL;
-
+const { handleClientEngagement } = require('./engagement_client');
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 console.log("🤖 EMTOP Back Office — Stock + Prix + Photo + Fiches démarré !");
 
