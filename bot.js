@@ -263,7 +263,15 @@ bot.on("message", async (msg) => {
       { parse_mode: "Markdown" }
     );
   }
+// Commandes engagement client
+  if (text.startsWith('/client') || text.startsWith('/eng')) {
+    return handleClientEngagement(bot, chatId, text);
+  }
 
+  // Recherche automatique par code client
+  if (/^(CL|CI)-\d+/i.test(text)) {
+    return handleClientEngagement(bot, chatId, text);
+  }
   const complexe = estQuestionComplexe(text);
   const queryRecherche = complexe ? extraireMotsCles(text) || text : text;
   const resultats = rechercher(queryRecherche);
